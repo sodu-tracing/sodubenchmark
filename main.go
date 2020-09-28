@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
+	traceservice "sodubenchmark/go/collector/trace/v1"
 	v11 "sodubenchmark/go/common/v1"
 	resoucev1 "sodubenchmark/go/resource/v1"
 	v1 "sodubenchmark/go/trace/v1"
+	"sync/atomic"
 	"time"
+
+	"google.golang.org/grpc"
 )
 
 func generateAttributes(n int) []*v11.KeyValue {
@@ -131,6 +136,60 @@ func generateTraces(num int, depth int) []*v1.ResourceSpans {
 	return resourceSpans
 }
 
-func main() {
+var totalIngestedSpans int64
 
+// NOTE: THIS IS NOT THE RIGHT WAY TO DO THE BENCHMARK. MY BENCHMARK ARE ALWAYS BIASED. IF YOU
+// HAVE ANY MORE IDEAS TO IMPROVE THIS BENCHMARK. PLEASE ENLIGHT ME.
+func main() {
+	conn, err := grpc.Dial("localhost:50051", grpc.WithInsecure())
+	if err != nil {
+		panic(err)
+	}
+	client := traceservice.NewTraceServiceClient(conn)
+	// Now we got client so let's start sending span.
+	numWorker := 4
+	numSpanPerSecond := 20000
+	startTime := time.Now()
+	for i := 0; i < numWorker; i++ {
+		go func() {
+			for {
+				spansForWorker := numSpanPerSecond / numWorker
+				resourceSpans := generateTraces(spansForWorker, 5)
+				bottom := 0
+				trimmedSpans := []*v1.ResourceSpans{}
+				if len(resourceSpans[bottom:]) > 20 {
+					trimmedSpans = resourceSpans[bottom : bottom+20]
+					bottom += 20
+				}
+				for {
+					// TODO: find much spans are sent by otel collector in one request.
+					_, err := client.Export(context.Background(), &traceservice.ExportTraceServiceRequest{
+						ResourceSpans: trimmedSpans,
+					})
+					if err != nil {
+						panic(err)
+					}
+					if len(resourceSpans[bottom:]) > 20 {
+						trimmedSpans = resourceSpans[bottom : bottom+20]
+						bottom += 20
+					} else {
+						trimmedSpans = resourceSpans[bottom:]
+						bottom += len(trimmedSpans)
+					}
+					if len(trimmedSpans) == 0 {
+						break
+					}
+				}
+				atomic.AddInt64(&totalIngestedSpans, int64(spansForWorker))
+			}
+		}()
+	}
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			elapsedDuration := time.Now().Sub(startTime)
+			fmt.Printf("number of span ingested per seconds %d. ingested spans %d elspsed seconds %f\n", atomic.LoadInt64(&totalIngestedSpans)/int64(elapsedDuration.Seconds()), atomic.LoadInt64(&totalIngestedSpans), elapsedDuration.Seconds())
+		}
+	}
 }
