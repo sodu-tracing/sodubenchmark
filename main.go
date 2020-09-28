@@ -100,38 +100,20 @@ func generateTraces(num int, depth int) []*v1.ResourceSpans {
 		num -= len(trace)
 		for i := 0; i < len(trace); i++ {
 			tmpSpans[i] = append(tmpSpans[i], trace[i])
-			// Batch all the resource spans if its' reaches 20
-			if len(tmpSpans[i]) > 20 {
-				resourceSpans = append(resourceSpans, &v1.ResourceSpans{
-					Resource: &resoucev1.Resource{
-						Attributes: generateResourceAttributes(i),
-					},
-					InstrumentationLibrarySpans: []*v1.InstrumentationLibrarySpans{
-						{
-							Spans: tmpSpans[i],
-						},
-					},
-				})
-				tmpSpans[i] = []*v1.Span{}
-			}
 		}
 	}
-
 	// Put remainging span.
 	for i := 0; i < len(tmpSpans); i++ {
-		if len(tmpSpans[i]) > 0 {
-			resourceSpans = append(resourceSpans, &v1.ResourceSpans{
-				Resource: &resoucev1.Resource{
-					Attributes: generateResourceAttributes(i),
+		resourceSpans = append(resourceSpans, &v1.ResourceSpans{
+			Resource: &resoucev1.Resource{
+				Attributes: generateResourceAttributes(i),
+			},
+			InstrumentationLibrarySpans: []*v1.InstrumentationLibrarySpans{
+				{
+					Spans: tmpSpans[i],
 				},
-				InstrumentationLibrarySpans: []*v1.InstrumentationLibrarySpans{
-					{
-						Spans: tmpSpans[i],
-					},
-				},
-			})
-			tmpSpans[i] = []*v1.Span{}
-		}
+			},
+		})
 	}
 	return resourceSpans
 }
@@ -148,39 +130,21 @@ func main() {
 	client := traceservice.NewTraceServiceClient(conn)
 	// Now we got client so let's start sending span.
 	numWorker := 4
-	numSpanPerSecond := 20000
+	numSpanPerSecond := 10000
 	startTime := time.Now()
 	for i := 0; i < numWorker; i++ {
 		go func() {
 			for {
 				spansForWorker := numSpanPerSecond / numWorker
 				resourceSpans := generateTraces(spansForWorker, 5)
-				bottom := 0
-				trimmedSpans := []*v1.ResourceSpans{}
-				if len(resourceSpans[bottom:]) > 20 {
-					trimmedSpans = resourceSpans[bottom : bottom+20]
-					bottom += 20
-				}
-				for {
-					// TODO: find much spans are sent by otel collector in one request.
-					_, err := client.Export(context.Background(), &traceservice.ExportTraceServiceRequest{
-						ResourceSpans: trimmedSpans,
-					})
-					if err != nil {
-						panic(err)
-					}
-					if len(resourceSpans[bottom:]) > 20 {
-						trimmedSpans = resourceSpans[bottom : bottom+20]
-						bottom += 20
-					} else {
-						trimmedSpans = resourceSpans[bottom:]
-						bottom += len(trimmedSpans)
-					}
-					if len(trimmedSpans) == 0 {
-						break
-					}
+				_, err := client.Export(context.Background(), &traceservice.ExportTraceServiceRequest{
+					ResourceSpans: resourceSpans,
+				})
+				if err != nil {
+					panic(err)
 				}
 				atomic.AddInt64(&totalIngestedSpans, int64(spansForWorker))
+				time.Sleep(1 * time.Second)
 			}
 		}()
 	}
