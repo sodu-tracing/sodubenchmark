@@ -8,6 +8,7 @@ import (
 	v11 "sodubenchmark/go/common/v1"
 	resoucev1 "sodubenchmark/go/resource/v1"
 	v1 "sodubenchmark/go/trace/v1"
+	"sodubenchmark/proto"
 	"sync/atomic"
 	"time"
 
@@ -118,6 +119,30 @@ func generateTraces(num int, depth int) []*v1.ResourceSpans {
 	return resourceSpans
 }
 
+func stressQuery(delay time.Duration) {
+	conn, err := grpc.Dial("localhost:50052", grpc.WithInsecure())
+	if err != nil {
+		panic(err)
+	}
+	client := proto.NewSoduStorageClient(conn)
+	for {
+		ts := uint64(0)
+		req := &proto.QueryRequest{
+			TimeRange: &proto.TimeRange{
+				MinStartTs: &ts,
+				MaxStartTs: &ts,
+			},
+		}
+		start := time.Now()
+		_, err = client.QueryTrace(context.Background(), req)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("time taken to execute sodu query %d \n", time.Now().Sub(start).Milliseconds())
+		time.Sleep(delay)
+	}
+}
+
 var totalIngestedSpans int64
 
 // NOTE: THIS IS NOT THE RIGHT WAY TO DO THE BENCHMARK. MY BENCHMARK ARE ALWAYS BIASED. IF YOU
@@ -148,6 +173,7 @@ func main() {
 			}
 		}()
 	}
+	go stressQuery(time.Second * 2)
 	ticker := time.NewTicker(time.Second)
 	for {
 		select {
